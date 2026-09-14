@@ -39,11 +39,16 @@ return res.status(200).json(user)
 }
 
 // intents whose "response" needs to be computed live on the server instead of trusting the model
+// the server (Render) runs in UTC, not the user's timezone - without this,
+// get_time/get_date would report the wrong local time entirely. Hardcoded to IST
+// since this app is built for Indian/Hinglish users; swap for a per-user timezone
+// if you ever support other regions.
+const IST_OFFSET = "+05:30"
 const dateTimeResponses = {
-   get_date: () => `current date is ${moment().format("YYYY-MM-DD")}`,
-   get_time: () => `current time is ${moment().format("hh:mm A")}`,
-   get_day: () => `today is ${moment().format("dddd")}`,
-   get_month: () => `today is ${moment().format("MMMM")}`,
+   get_date: () => `current date is ${moment().utcOffset(IST_OFFSET).format("YYYY-MM-DD")}`,
+   get_time: () => `current time is ${moment().utcOffset(IST_OFFSET).format("hh:mm A")}`,
+   get_day: () => `today is ${moment().utcOffset(IST_OFFSET).format("dddd")}`,
+   get_month: () => `today is ${moment().utcOffset(IST_OFFSET).format("MMMM")}`,
 }
 
 // only digits, whitespace, and basic arithmetic symbols are ever allowed through -

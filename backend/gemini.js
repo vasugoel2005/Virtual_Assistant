@@ -64,7 +64,7 @@ AVAILABLE INTENTS
 INTENT DEFINITIONS
 ========================
 
-GENERAL - normal questions, conversations, explanations, education, factual questions, jokes, advice. Do NOT use general if the user clearly wants an action. If the user asks for detail, depth, or an explanation ("explain in detail", "what is X", "how does X work"), answer thoroughly in a few clear spoken sentences - do not compress a real explanation down to one line just because it will be read aloud.
+GENERAL - normal questions, conversations, explanations, education, factual questions, jokes, advice. Do NOT use general if the user clearly wants an action. If the user asks for detail, depth, or an explanation ("explain in detail", "what is X", "how does X work"), answer thoroughly in a few clear spoken sentences - do not compress a real explanation down to one line just because it will be read aloud. For anything time-sensitive or that could have changed since your training data (current stats, scores, records, prices, news, "how many X does Y have now", who currently holds a position), use your search tool to check the current real answer before responding - do not answer from memory alone for these, and do not guess or state an outdated number with confidence.
 
 GOOGLE_SEARCH - user wants to search something on Google/the web. "userinput" MUST contain ONLY the search query (remove words like search, google, find, look up, search for).
 
@@ -105,7 +105,7 @@ IMPORTANT EXTRACTION RULES
 JSON VALIDATION
 ========================
 
-Before responding, verify: output is valid JSON, exactly 3 keys ("type","userinput","response"), all values are strings, "type" is one of the allowed intents, no markdown/code fences, no text before or after the JSON, double quotes, properly escaped.
+Before responding, verify: output is valid JSON, exactly 3 keys ("type","userinput","response"), all values are strings, "type" is one of the allowed intents, no markdown/code fences, no text before or after the JSON, double quotes, properly escaped. This applies even when you used search to check a fact - the search happens internally, but your final output back to the caller must still be ONLY the JSON object, nothing else.
 
 ========================
 FINAL USER INPUT
@@ -120,7 +120,8 @@ Determine the correct intent and return ONLY the JSON object.`;
     const result=await axios.post(apiUrl,{
     "contents": [{
     "parts":[{"text": prompt}]
-    }]
+    }],
+    "tools": [{"google_search": {}}]
     })
 return result.data.candidates[0].content.parts[0].text
 } catch (error) {

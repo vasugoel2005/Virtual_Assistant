@@ -10,6 +10,7 @@ function Home() {
   const {userData,serverUrl,setUserData,getGeminiResponse}=useContext(userDataContext)
   const navigate=useNavigate()
   const [listening,setListening]=useState(false)
+  const [micBlocked,setMicBlocked]=useState(false)
   const [userText,setUserText]=useState("")
   const [aiText,setAiText]=useState("")
   const isSpeakingRef=useRef(false)
@@ -20,6 +21,7 @@ function Home() {
   const pendingCommandRef=useRef("") // accumulates final chunks since the wake word was heard, so we send the whole sentence, not just the first fragment
   const pauseTimerRef=useRef(null) // fires once the user has actually stopped talking for a moment
   const lastReadIndexRef=useRef(0) // how many results we've already consumed - tracked ourselves because e.resultIndex is unreliable on Android Chrome (often stuck at 0), which would otherwise re-read the whole session's history on every event
+  const bufferStartTimeRef=useRef(0) // when the current command started buffering - lets us force-send after a max wait even if noise keeps resetting the pause timer
   const synth=window.speechSynthesis
 
   const handleLogOut=async ()=>{
@@ -214,6 +216,14 @@ useEffect(() => {
     console.warn("Recognition error:", event.error);
     isRecognizingRef.current = false;
     setListening(false);
+
+    // permission denied isn't a transient error - retrying won't help, it'll just fail
+    // again immediately, forever, with no feedback to the user
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      setMicBlocked(true);
+      return;
+    }
+
     if (event.error !== "aborted" && isMounted && !isSpeakingRef.current && !isProcessingRef.current) {
       setTimeout(() => {
         if (isMounted) {
@@ -297,12 +307,19 @@ useEffect(() => {
     if (!alreadyBuffering && !hasWakeWord) return;
     if (isProcessingRef.current) return; // a previous command is still being handled
 
+    if (!alreadyBuffering) bufferStartTimeRef.current = Date.now();
+
     pendingCommandRef.current = (pendingCommandRef.current + " " + newFinal).trim();
     setUserText(pendingCommandRef.current);
 
     // reset the pause timer every time new speech comes in - only once the user
-    // actually stops talking for a moment do we treat the sentence as complete
+    // actually stops talking for a moment do we treat the sentence as complete.
+    // but cap the TOTAL wait at 4s from when buffering started, so a noisy mic that
+    // keeps generating tiny "final" fragments can never extend this indefinitely -
+    // this is what was actually causing the buffer to grow forever on your phone
     if (pauseTimerRef.current) clearTimeout(pauseTimerRef.current);
+    const elapsed = Date.now() - bufferStartTimeRef.current;
+    const delay = Math.max(0, Math.min(700, 4000 - elapsed));
     pauseTimerRef.current = setTimeout(() => {
       const fullTranscript = pendingCommandRef.current;
       pendingCommandRef.current = "";
@@ -367,7 +384,11 @@ useEffect(() => {
       {aiText && <img src={aiImg} alt="" className='w-[200px]'/>}
     
     <h1 className='text-white text-[18px] font-semibold text-wrap'>{userText?userText:aiText?aiText:null}</h1>
-      
+      {micBlocked && (
+        <p className='text-red-300 text-[15px] text-center px-[20px] max-w-[320px]'>
+          Microphone access is blocked. Tap the lock/site-info icon next to the address bar, allow Microphone, then reload this page.
+        </p>
+      )}
     </div>
   )
 }
