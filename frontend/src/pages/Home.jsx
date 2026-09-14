@@ -16,6 +16,9 @@ function Home() {
   const recognitionRef=useRef(null)
   const [ham,setHam]=useState(false)
   const isRecognizingRef=useRef(false)
+  const isProcessingRef=useRef(false) // true from the moment a command is heard until the spoken reply finishes - closes the gap where the mic would otherwise restart mid-request and pick up its own TTS output
+  const pendingCommandRef=useRef("") // accumulates final chunks since the wake word was heard, so we send the whole sentence, not just the first fragment
+  const pauseTimerRef=useRef(null) // fires once the user has actually stopped talking for a moment
   const synth=window.speechSynthesis
 
   const handleLogOut=async ()=>{
@@ -31,7 +34,7 @@ function Home() {
 
   const startRecognition = () => {
     
-   if (!isSpeakingRef.current && !isRecognizingRef.current) {
+   if (!isSpeakingRef.current && !isRecognizingRef.current && !isProcessingRef.current) {
     try {
       recognitionRef.current?.start();
       console.log("Recognition requested to start");
@@ -58,6 +61,7 @@ function Home() {
     utterence.onend=()=>{
         setAiText("");
   isSpeakingRef.current = false;
+  isProcessingRef.current = false;
   setTimeout(() => {
     startRecognition(); // ⏳ Delay se race condition avoid hoti hai
   }, 300);
@@ -190,7 +194,7 @@ useEffect(() => {
   recognition.onend = () => {
     isRecognizingRef.current = false;
     setListening(false);
-    if (isMounted && !isSpeakingRef.current) {
+    if (isMounted && !isSpeakingRef.current && !isProcessingRef.current) {
       setTimeout(() => {
         if (isMounted) {
           try {
@@ -208,7 +212,7 @@ useEffect(() => {
     console.warn("Recognition error:", event.error);
     isRecognizingRef.current = false;
     setListening(false);
-    if (event.error !== "aborted" && isMounted && !isSpeakingRef.current) {
+    if (event.error !== "aborted" && isMounted && !isSpeakingRef.current && !isProcessingRef.current) {
       setTimeout(() => {
         if (isMounted) {
           try {
@@ -222,7 +226,42 @@ useEffect(() => {
     }
   };
 
-  recognition.onresult = async (e) => {
+  const processCommand = async (transcript, assistantName) => {
+    // ignore a bare/near-empty command - on mobile this is almost always the mic
+    // mishearing background noise as just the wake word, with nothing real said.
+    // Reacting to it is what produces the repeated generic "hi, I'm Jarvis" reply.
+    const withoutWakeWord = transcript.toLowerCase().replace(assistantName, "").trim()
+    if (withoutWakeWord.length < 2) {
+      isProcessingRef.current = false;
+      setTimeout(() => startRecognition(), 300);
+      return;
+    }
+
+    setAiText("");
+    setUserText(transcript);
+    setListening(false);
+    try {
+      const data = await getGeminiResponse(transcript);
+      if (data) {
+        handleCommand(data, transcript);
+        setAiText(data.response || "");
+        if (!data.response) {
+          // nothing to speak means speak()'s onend will never fire to release the lock
+          isProcessingRef.current = false;
+          setTimeout(() => startRecognition(), 300);
+        }
+      } else {
+        isProcessingRef.current = false; // nothing will call speak() to release the lock
+        setTimeout(() => startRecognition(), 300);
+      }
+    } catch (err) {
+      isProcessingRef.current = false;
+      setTimeout(() => startRecognition(), 300);
+    }
+    setUserText("");
+  }
+
+  recognition.onresult = (e) => {
     let finalTranscript = "";
     let interimTranscript = "";
     // scan every result from the point the engine last reported, not just the last one,
@@ -234,25 +273,37 @@ useEffect(() => {
     }
 
     // live captions while the user is still talking = faster, more responsive feel
-    if (interimTranscript) setUserText(interimTranscript.trim());
+    if (interimTranscript) setUserText((pendingCommandRef.current + " " + interimTranscript).trim());
 
-    const transcript = finalTranscript.trim();
-    if (!transcript) return;
+    const newFinal = finalTranscript.trim();
+    if (!newFinal) return;
 
     const assistantName = userData?.assistantName?.trim().toLowerCase();
-    if (assistantName && transcript.toLowerCase().includes(assistantName)) {
-      setAiText("");
-      setUserText(transcript);
+    const alreadyBuffering = pendingCommandRef.current.length > 0;
+    const hasWakeWord = assistantName && newFinal.toLowerCase().includes(assistantName);
+
+    // mobile's engine often finalizes a sentence in several short pieces with brief
+    // pauses in between - a chunk with no wake word and nothing pending is just
+    // background noise/unrelated speech, not something meant for the assistant
+    if (!alreadyBuffering && !hasWakeWord) return;
+    if (isProcessingRef.current) return; // a previous command is still being handled
+
+    pendingCommandRef.current = (pendingCommandRef.current + " " + newFinal).trim();
+    setUserText(pendingCommandRef.current);
+
+    // reset the pause timer every time new speech comes in - only once the user
+    // actually stops talking for a moment do we treat the sentence as complete
+    if (pauseTimerRef.current) clearTimeout(pauseTimerRef.current);
+    pauseTimerRef.current = setTimeout(() => {
+      const fullTranscript = pendingCommandRef.current;
+      pendingCommandRef.current = "";
+      if (!fullTranscript || !assistantName || !fullTranscript.toLowerCase().includes(assistantName)) return;
+
+      isProcessingRef.current = true;
       recognition.stop();
       isRecognizingRef.current = false;
-      setListening(false);
-      const data = await getGeminiResponse(transcript);
-      if (data) {
-        handleCommand(data, transcript);
-        setAiText(data.response || "");
-      }
-      setUserText("");
-    }
+      processCommand(fullTranscript, assistantName);
+    }, 700);
   };
 
 
@@ -265,6 +316,7 @@ useEffect(() => {
   return () => {
     isMounted = false;
     clearTimeout(startTimeout);
+    if (pauseTimerRef.current) clearTimeout(pauseTimerRef.current);
     recognition.stop();
     setListening(false);
     isRecognizingRef.current = false;
