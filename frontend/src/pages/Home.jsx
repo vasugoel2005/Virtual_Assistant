@@ -19,6 +19,7 @@ function Home() {
   const isProcessingRef=useRef(false) // true from the moment a command is heard until the spoken reply finishes - closes the gap where the mic would otherwise restart mid-request and pick up its own TTS output
   const pendingCommandRef=useRef("") // accumulates final chunks since the wake word was heard, so we send the whole sentence, not just the first fragment
   const pauseTimerRef=useRef(null) // fires once the user has actually stopped talking for a moment
+  const lastReadIndexRef=useRef(0) // how many results we've already consumed - tracked ourselves because e.resultIndex is unreliable on Android Chrome (often stuck at 0), which would otherwise re-read the whole session's history on every event
   const synth=window.speechSynthesis
 
   const handleLogOut=async ()=>{
@@ -188,6 +189,7 @@ useEffect(() => {
 
   recognition.onstart = () => {
     isRecognizingRef.current = true;
+    lastReadIndexRef.current = 0; // new session, e.results starts fresh
     setListening(true);
   };
 
@@ -264,12 +266,19 @@ useEffect(() => {
   recognition.onresult = (e) => {
     let finalTranscript = "";
     let interimTranscript = "";
-    // scan every result from the point the engine last reported, not just the last one,
-    // so a wake word spoken early in a longer utterance is never missed
-    for (let i = e.resultIndex; i < e.results.length; i++) {
+    // start from whichever position is further along - our own tracked index, or the
+    // browser's resultIndex if it happens to be ahead. Never trust resultIndex alone:
+    // on Android Chrome it's frequently stuck at 0, which would re-read and re-append
+    // the entire session's history on every single result event.
+    const startIndex = Math.max(e.resultIndex || 0, lastReadIndexRef.current);
+    for (let i = startIndex; i < e.results.length; i++) {
       const chunk = e.results[i][0].transcript;
-      if (e.results[i].isFinal) finalTranscript += chunk;
-      else interimTranscript += chunk;
+      if (e.results[i].isFinal) {
+        finalTranscript += chunk;
+        lastReadIndexRef.current = i + 1; // this index is done - never re-read it, even if resultIndex misreports later
+      } else {
+        interimTranscript += chunk; // not final yet - leave it re-readable next event
+      }
     }
 
     // live captions while the user is still talking = faster, more responsive feel
@@ -327,7 +336,7 @@ useEffect(() => {
 
 
   return (
-    <div className='w-full h-[100vh] bg-gradient-to-t from-[black] to-[#02023d] flex justify-center items-center flex-col gap-[15px] overflow-hidden'>
+    <div className='w-full h-[100dvh] bg-gradient-to-t from-[black] to-[#02023d] flex justify-center items-center flex-col gap-[15px] overflow-hidden'>
       <CgMenuRight className='lg:hidden text-white absolute top-[20px] right-[20px] w-[25px] h-[25px]' onClick={()=>setHam(true)}/>
       <div className={`absolute lg:hidden top-0 w-full h-full bg-[#00000053] backdrop-blur-lg p-[20px] flex flex-col gap-[20px] items-start ${ham?"translate-x-0":"translate-x-full"} transition-transform`}>
  <RxCross1 className=' text-white absolute top-[20px] right-[20px] w-[25px] h-[25px]' onClick={()=>setHam(false)}/>
