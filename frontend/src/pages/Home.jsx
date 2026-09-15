@@ -307,9 +307,14 @@ useEffect(() => {
     if (!alreadyBuffering && !hasWakeWord) return;
     if (isProcessingRef.current) return; // a previous command is still being handled
 
-    if (!alreadyBuffering) bufferStartTimeRef.current = Date.now();
+    // hearing the wake word again while something is already buffered almost always
+    // means the user gave up and restarted their sentence, not that they're
+    // continuing it - a genuine continuation ("search calculator", "on google")
+    // won't contain the wake word again. Treat this as a fresh start.
+    const isRestart = alreadyBuffering && hasWakeWord;
+    if (isRestart || !alreadyBuffering) bufferStartTimeRef.current = Date.now();
 
-    pendingCommandRef.current = (pendingCommandRef.current + " " + newFinal).trim();
+    pendingCommandRef.current = isRestart ? newFinal : (pendingCommandRef.current + " " + newFinal).trim();
     setUserText(pendingCommandRef.current);
 
     // reset the pause timer every time new speech comes in - only once the user
